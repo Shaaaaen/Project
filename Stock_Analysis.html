@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stock Analysis App</title>
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <!-- Chart.js library -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      background-color: #000;
+      color: pink;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    .navbar-brand-center {
+      margin: 0 auto;
+      letter-spacing: 6px;
+      font-weight: 700;
+      font-size: 1.8rem;
+      color: pink !important;
+    }
+
+    .btn-pink {
+      background: linear-gradient(to right, #ff69b4, #ff1493);
+      color: white;
+      font-weight: bold;
+      border: none;
+      transition: transform 0.2s ease, box-shadow 0.3s ease;
+      border-radius: 8px;
+    }
+
+    .btn-pink:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(255, 105, 180, 0.5);
+    }
+
+    .card-dark {
+      background-color: #000000;
+      color: pink;
+      box-shadow: 0 0 20px rgba(255, 192, 203, 0.2);
+      transition: box-shadow 0.3s ease-in-out;
+    }
+
+    #stockChart {
+      display: none;
+      opacity: 0;
+      background-color: #000;
+      border-radius: 12px;
+      padding: 10px;
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+      transition: opacity 0.6s ease-in-out;
+    }
+
+    footer {
+      background-color: black;
+      color: pink;
+      padding: 15px;
+      font-size: 14px;
+    }
+
+    .spinner-border-pink {
+      color: pink;
+    }
+
+    input.form-control::placeholder {
+      color: #564043;
+      opacity: 0.7;
+    }
+
+    h3.text-center {
+      font-weight: 600;
+      letter-spacing: 1px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg" style="background-color: black;">
+    <div class="container d-flex justify-content-center">
+      <a class="navbar-brand navbar-brand-center" href="#">STOCK ANALYSIS APP</a> 
+      <!-- Navbar if got subpage, a and href# can let us always back to main page --> 
+    </div>
+  </nav>
+
+  <!-- Main container -->
+  <div class="container">
+    <div class="card card-dark p-4 shadow mb-4">
+      <h3 class="mb-3 text-center">Search Stock</h3>
+      <div class="row g-2 justify-content-center">
+        <div class="col-md-6">
+          <input type="text" id="stockSymbol" class="form-control" placeholder="Enter stock symbol, e.g. AAPL" />
+        </div>
+        <div class="col-md-2 d-grid">
+          <button class="btn btn-pink" onclick="getStockData()">Search</button>
+        </div>
+      </div>
+      <div class="mt-4">
+        <canvas id="stockChart" style="max-height: 500px;"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading Spinner -->
+  <div id="loadingSpinner" class="spinner-border spinner-border-pink" role="status" style="display:none; position: fixed; top: 50%; left: 50%; z-index: 1000;">
+    <span class="visually-hidden">Loading...</span>
+  </div>
+
+  <!-- Footer -->
+  <footer class="text-center mt-5 mb-3">
+    &copy; 2025 PHUNG YI XUAN 1211109738 - Stock Analysis Project
+  </footer>
+
+<script>
+  let myChart = null;
+
+  async function getStockData() {
+    const symbolInput = document.getElementById('stockSymbol');
+    const symbol = symbolInput.value.trim().toUpperCase();
+
+    if (!symbol) {
+      alert("Please enter a stock symbol!");
+      return;
+    }
+
+    document.getElementById('loadingSpinner').style.display = 'inline-block';
+
+    const apiKey = '1MYH1RVBL7IW5QT8';  // Replace with your API Key
+    const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&apikey=${apiKey}`;
+
+    try {
+      const response = await fetch(url);
+      const data = await response.json();
+
+      // Detect API limit hit
+      if (data['Note']) {
+        alert("API call frequency exceeded. Please wait and try again.");
+        console.warn("API limit notice:", data['Note']);
+        return;
+      }
+
+      if (data['Error Message'] || !data['Time Series (Daily)']) {
+        alert("Invalid stock symbol or no data found.");
+        return;
+      }
+
+      const timeSeries = data['Time Series (Daily)'];
+      const allDates = Object.keys(timeSeries);
+
+      if (allDates.length === 0) {
+        alert("No stock data available for this symbol.");
+        return;
+      }
+
+      // Sort dates descending (latest first)
+      allDates.sort((a, b) => new Date(b) - new Date(a));
+
+      // Take the latest 30 available days (or fewer if less data)
+      const recentDates = allDates.slice(0, 30).reverse();
+
+      // Extract closing prices
+      const closingPrices = recentDates.map(date => parseFloat(timeSeries[date]['4. close']));
+
+      // Predict next two days prices
+      const predicted = predictFuturePrices(closingPrices);
+
+      // Get future dates skipping weekends (generate 2 next business days)
+      const futureDates = getNextBusinessDays(recentDates[recentDates.length - 1], 2);
+
+      const combinedDates = recentDates.concat(futureDates);
+      const combinedPrices = closingPrices.concat(predicted);
+
+      drawChart(combinedDates, combinedPrices, symbol);
+
+    } catch (error) {
+      alert("Failed to fetch data, please check your network.");
+      console.error(error);
+    } finally {
+      document.getElementById('loadingSpinner').style.display = 'none';
+    }
+  }
+
+  // Helper function to get next business days (skip Sat & Sun)
+  function getNextBusinessDays(startDateStr, count) {
+    const dates = [];
+    let date = new Date(startDateStr);
+
+    while (dates.length < count) {
+      date.setDate(date.getDate() + 1);
+      const day = date.getDay();
+      // Skip Saturday (6) and Sunday (0)
+      if (day !== 0 && day !== 6) {
+        dates.push(date.toISOString().split('T')[0]);
+      }
+    }
+    return dates;
+  }
+
+  // Simple linear regression prediction function
+  function predictFuturePrices(prices) {
+    const n = prices.length;
+    const x = [...Array(n).keys()]; // [0,1,2,...,n-1]
+    
+    // Calculate averages
+    const meanX = x.reduce((a, b) => a + b, 0) / n;
+    const meanY = prices.reduce((a, b) => a + b, 0) / n;
+
+    // Calculate slope (b) and intercept (a)
+    let numerator = 0, denominator = 0;
+    for (let i = 0; i < n; i++) {
+      numerator += (x[i] - meanX) * (prices[i] - meanY);
+      denominator += (x[i] - meanX) ** 2;
+    }
+    const b = numerator / denominator;
+    const a = meanY - b * meanX;
+
+    // Predict next two days (n and n+1)
+    return [a + b * n, a + b * (n + 1)];
+  }
+
+  // Calculate Simple Moving Average (SMA)
+  function calculateSMA(prices, period = 5) {
+    let sma = [];
+    for (let i = 0; i < prices.length; i++) {
+      if (i < period - 1) {
+        sma.push(null);
+      } else {
+        const sum = prices.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
+        sma.push(sum / period);
+      }
+    }
+    return sma;
+  }
+
+  // Calculate RSI
+  function calculateRSI(prices, period = 14) {
+    let gains = [];
+    let losses = [];
+    for (let i = 1; i < prices.length; i++) {
+      const change = prices[i] - prices[i - 1];
+      gains.push(change > 0 ? change : 0);
+      losses.push(change < 0 ? -change : 0);
+    }
+
+    let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+    let rsi = Array(period).fill(null);
+
+    for (let i = period; i < gains.length; i++) {
+      avgGain = (avgGain * (period - 1) + gains[i]) / period;
+      avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+
+      let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+      rsi.push(100 - 100 / (1 + rs));
+    }
+
+    // Padding so rsi length == prices length
+    while (rsi.length < prices.length) rsi.unshift(null);
+    return rsi;
+  }
+
+  // Calculate EMA
+  function calculateEMA(prices, period) {
+    const k = 2 / (period + 1);
+    let ema = [prices[0]];
+    for (let i = 1; i < prices.length; i++) {
+      ema.push(prices[i] * k + ema[i - 1] * (1 - k));
+    }
+    return ema;
+  }
+
+  // Calculate MACD
+  function calculateMACD(prices) {
+    const ema12 = calculateEMA(prices, 12);
+    const ema26 = calculateEMA(prices, 26);
+    let macd = [];
+    for (let i = 0; i < prices.length; i++) {
+      macd.push(ema12[i] - ema26[i]);
+    }
+    return macd;
+  }
+
+  function drawChart(labels, prices, symbol) {
+    const sma = calculateSMA(prices, 5);
+    const rsi = calculateRSI(prices, 14);
+    const macd = calculateMACD(prices);
+
+    // Clean NaNs to nulls for Chart.js compatibility
+    const safeData = arr => arr.map(v => (isNaN(v) ? null : v));
+
+    if (myChart) {
+      myChart.destroy();
+    }
+
+    const ctx = document.getElementById('stockChart').getContext('2d');
+
+    myChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Closing Price',
+            data: prices,
+            borderColor: 'pink',
+            backgroundColor: 'rgba(255,192,203,0.2)',
+            yAxisID: 'y1',
+            tension: 0.2,
+            fill: true,
+            pointRadius: 0,
+          },
+          {
+            label: 'SMA (5)',
+            data: safeData(sma),
+            borderColor: 'yellow',
+            yAxisID: 'y1',
+            tension: 0.2,
+            fill: false,
+            pointRadius: 0,
+          },
+          {
+            label: 'RSI (14)',
+            data: safeData(rsi),
+            borderColor: 'cyan',
+            yAxisID: 'y2',
+            tension: 0.2,
+            fill: false,
+            pointRadius: 0,
+          },
+          {
+            label: 'MACD',
+            data: safeData(macd),
+            borderColor: 'lightgreen',
+            yAxisID: 'y3',
+            tension: 0.2,
+            fill: false,
+            pointRadius: 0,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        interaction: {
+          mode: 'index',
+          intersect: false,
+        },
+        stacked: false,
+        scales: {
+          y1: {
+            type: 'linear',
+            position: 'left',
+            title: {
+              display: true,
+              text: 'Price',
+              color: 'pink',
+            },
+            grid: {
+              color: 'rgba(255, 192, 203, 0.1)',
+            },
+            ticks: {
+              color: 'pink',
+            },
+          },
+          y2: {
+            type: 'linear',
+            position: 'right',
+            min: 0,
+            max: 100,
+            title: {
+              display: true,
+              text: 'RSI',
+              color: 'cyan',
+            },
+            grid: {
+              drawOnChartArea: false,
+            },
+            ticks: {
+              color: 'cyan',
+            },
+          },
+          y3: {
+            type: 'linear',
+            position: 'right',
+            offset: true,
+            title: {
+              display: true,
+              text: 'MACD',
+              color: 'lightgreen',
+            },
+            grid: {
+              drawOnChartArea: false,
+            },
+            ticks: {
+              color: 'lightgreen',
+            },
+          },
+          x: {
+            ticks: {
+              color: 'pink',
+            },
+          },
+        },
+        plugins: {
+          legend: {
+            labels: {
+              color: 'pink',
+            },
+          },
+          tooltip: {
+            mode: 'index',
+            intersect: false,
+          },
+        },
+      },
+    });
+
+    const chartCanvas = document.getElementById('stockChart');
+    chartCanvas.style.display = 'block';
+    setTimeout(() => {
+      chartCanvas.style.opacity = 1;
+    }, 50);
+  }
+</script>
+</body>
+</html>
