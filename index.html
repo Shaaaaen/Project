@@ -2,10 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Stock Analysis App</title>
-  <!-- Bootstrap CSS -->
+  <title>Stock Analysis Web Application</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
-  <!-- Chart.js library -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body {
@@ -36,6 +34,11 @@
       box-shadow: 0 4px 12px rgba(255, 105, 180, 0.5);
     }
 
+    .btn-pink.active {
+      background: linear-gradient(to right, #ff1493, #ff69b4);
+      box-shadow: 0 0 10px rgba(255, 105, 180, 0.8);
+    }
+
     .card-dark {
       background-color: #000000;
       color: pink;
@@ -51,6 +54,7 @@
       padding: 10px;
       box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
       transition: opacity 0.6s ease-in-out;
+      cursor: crosshair;
     }
 
     footer {
@@ -74,19 +78,63 @@
       letter-spacing: 1px;
       font-weight: bold;
     }
+
+    .chart-controls {
+      text-align: center;
+      margin-bottom: 15px;
+    }
+
+    .chart-notes {
+      color: pink;
+      font-size: 0.9rem;
+      margin-top: 10px;
+      text-align: center;
+    }
+
+    .chartjs-annotation-label {
+      background-color: rgba(0, 0, 0, 0.7) !important;
+      color: pink !important;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 12px;
+    }
+
+    .marker-list {
+      max-height: 150px;
+      overflow-y: auto;
+      margin-top: 15px;
+      border: 1px solid rgba(255, 192, 203, 0.3);
+      border-radius: 5px;
+      padding: 10px;
+    }
+
+    .marker-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px;
+      border-bottom: 1px dashed rgba(255, 192, 203, 0.2);
+    }
+
+    .marker-item:last-child {
+      border-bottom: none;
+    }
+
+    .delete-marker {
+      color: #ff5555;
+      cursor: pointer;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
 
-  <!-- Navbar -->
   <nav class="navbar navbar-expand-lg" style="background-color: black;">
     <div class="container d-flex justify-content-center">
-      <a class="navbar-brand navbar-brand-center" href="#">STOCK ANALYSIS APP</a> 
-      <!-- Navbar if got subpage, a and href# can let us always back to main page --> 
+      <a class="navbar-brand navbar-brand-center" href="#">STOCK ANALYSIS WEB APPLICATION</a>
     </div>
   </nav>
 
-  <!-- Main container -->
   <div class="container">
     <div class="card card-dark p-4 shadow mb-4">
       <h3 class="mb-3 text-center">Search Stock</h3>
@@ -99,23 +147,33 @@
         </div>
       </div>
       <div class="mt-4">
-        <canvas id="stockChart" style="max-height: 500px;"></canvas>
+        <canvas id="stockChart"></canvas>
+        <div class="chart-notes" id="markerInstructions" style="display: none;">
+          Click on the chart to add markers at closing prices. Click "Done Adding Markers" when finished.
+        </div>
+        <div id="markerListContainer" style="display: none;">
+          <h6 class="text-center mt-3">Markers</h6>
+          <div class="marker-list" id="markerList"></div>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- Loading Spinner -->
   <div id="loadingSpinner" class="spinner-border spinner-border-pink" role="status" style="display:none; position: fixed; top: 50%; left: 50%; z-index: 1000;">
     <span class="visually-hidden">Loading...</span>
   </div>
 
-  <!-- Footer -->
   <footer class="text-center mt-5 mb-3">
     &copy; 2025 PHUNG YI XUAN 1211109738 - Stock Analysis Project
   </footer>
 
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+
 <script>
   let myChart = null;
+  let isAddingMarker = false;
+  let markers = [];
 
   async function getStockData() {
     const symbolInput = document.getElementById('stockSymbol');
@@ -128,53 +186,36 @@
 
     document.getElementById('loadingSpinner').style.display = 'inline-block';
 
-    const apiKey = 'XCRMFZ4C247ADSB6';  // API Key
+    const apiKey = 'XCRMFZ4C247ADSB6'; //API Key
     const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&apikey=${apiKey}`;
 
     try {
       const response = await fetch(url);
       const data = await response.json();
-
-      // Detect API limit hit
       if (data['Note']) {
         alert("API call frequency exceeded. Please wait and try again.");
         console.warn("API limit notice:", data['Note']);
         return;
       }
-
       if (data['Error Message'] || !data['Time Series (Daily)']) {
         alert("Invalid stock symbol or no data found.");
         return;
       }
-
       const timeSeries = data['Time Series (Daily)'];
       const allDates = Object.keys(timeSeries);
-
       if (allDates.length === 0) {
         alert("No stock data available for this symbol.");
         return;
       }
-
-      // Sort dates descending (latest first)
+      
       allDates.sort((a, b) => new Date(b) - new Date(a));
-
-      // Take the latest 30 available days (or fewer if less data)
       const recentDates = allDates.slice(0, 30).reverse();
-
-      // Extract closing prices
       const closingPrices = recentDates.map(date => parseFloat(timeSeries[date]['4. close']));
-
-      // Predict next two days prices
       const predicted = predictFuturePrices(closingPrices);
-
-      // Get future dates skipping weekends (generate 2 next business days)
       const futureDates = getNextBusinessDays(recentDates[recentDates.length - 1], 2);
-
       const combinedDates = recentDates.concat(futureDates);
       const combinedPrices = closingPrices.concat(predicted);
-
       drawChart(combinedDates, combinedPrices, symbol);
-
     } catch (error) {
       alert("Failed to fetch data, please check your network.");
       console.error(error);
@@ -183,7 +224,6 @@
     }
   }
 
-  // Helper function to get next business days (skip Sat & Sun)
   function getNextBusinessDays(startDateStr, count) {
     const dates = [];
     let date = new Date(startDateStr);
@@ -191,7 +231,7 @@
     while (dates.length < count) {
       date.setDate(date.getDate() + 1);
       const day = date.getDay();
-      // Skip Saturday (6) and Sunday (0)
+      // Skip Sunday (0) and Saturday (6)
       if (day !== 0 && day !== 6) {
         dates.push(date.toISOString().split('T')[0]);
       }
@@ -199,16 +239,12 @@
     return dates;
   }
 
-  // Simple linear regression prediction function
   function predictFuturePrices(prices) {
     const n = prices.length;
     const x = [...Array(n).keys()]; // [0,1,2,...,n-1]
     
-    // Calculate averages
     const meanX = x.reduce((a, b) => a + b, 0) / n;
     const meanY = prices.reduce((a, b) => a + b, 0) / n;
-
-    // Calculate slope (b) and intercept (a)
     let numerator = 0, denominator = 0;
     for (let i = 0; i < n; i++) {
       numerator += (x[i] - meanX) * (prices[i] - meanY);
@@ -217,11 +253,9 @@
     const b = numerator / denominator;
     const a = meanY - b * meanX;
 
-    // Predict next two days (n and n+1)
     return [a + b * n, a + b * (n + 1)];
   }
 
-  // Calculate Simple Moving Average (SMA)
   function calculateSMA(prices, period = 5) {
     let sma = [];
     for (let i = 0; i < prices.length; i++) {
@@ -235,7 +269,6 @@
     return sma;
   }
 
-  // Calculate RSI
   function calculateRSI(prices, period = 14) {
     let gains = [];
     let losses = [];
@@ -247,7 +280,6 @@
 
     let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
     let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
-
     let rsi = Array(period).fill(null);
 
     for (let i = period; i < gains.length; i++) {
@@ -257,13 +289,10 @@
       let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
       rsi.push(100 - 100 / (1 + rs));
     }
-
-    // Padding so rsi length == prices length
     while (rsi.length < prices.length) rsi.unshift(null);
     return rsi;
   }
 
-  // Calculate EMA
   function calculateEMA(prices, period) {
     const k = 2 / (period + 1);
     let ema = [prices[0]];
@@ -273,7 +302,6 @@
     return ema;
   }
 
-  // Calculate MACD
   function calculateMACD(prices) {
     const ema12 = calculateEMA(prices, 12);
     const ema26 = calculateEMA(prices, 26);
@@ -288,12 +316,12 @@
     const sma = calculateSMA(prices, 5);
     const rsi = calculateRSI(prices, 14);
     const macd = calculateMACD(prices);
-
-    // Clean NaNs to nulls for Chart.js compatibility
     const safeData = arr => arr.map(v => (isNaN(v) ? null : v));
 
     if (myChart) {
       myChart.destroy();
+      markers = []; 
+      document.getElementById('markerListContainer').style.display = 'none';
     }
 
     const ctx = document.getElementById('stockChart').getContext('2d');
@@ -349,6 +377,54 @@
           intersect: false,
         },
         stacked: false,
+        onClick: (e) => {
+          if (isAddingMarker) {
+            const canvasPosition = Chart.helpers.getRelativePosition(e, myChart);
+            
+            const dataX = myChart.scales.x.getValueForPixel(canvasPosition.x);
+            const dateIndex = Math.round(dataX);
+            
+            if (dateIndex >= 0 && dateIndex < myChart.data.labels.length) {
+              const date = myChart.data.labels[dateIndex];
+              const price = myChart.data.datasets[0].data[dateIndex];
+              if (price !== null && !isNaN(price)) {
+                addMarkerAtPosition(date, price);
+              }
+            }
+          }
+        },
+        plugins: {
+          zoom: {
+            zoom: {
+              wheel: {
+                enabled: true,
+              },
+              pinch: {
+                enabled: true
+              },
+              mode: 'xy',
+            },
+            pan: {
+              enabled: true,
+              mode: 'xy',
+            },
+            limits: {
+              y: {min: 'original', max: 'original'}
+            }
+          },
+          annotation: {
+            annotations: {}
+          },
+          tooltip: {
+            mode: 'index',
+            intersect: false,
+          },
+          legend: {
+            labels: {
+              color: 'pink',
+            },
+          }
+        },
         scales: {
           y1: {
             type: 'linear',
@@ -404,25 +480,114 @@
             },
           },
         },
-        plugins: {
-          legend: {
-            labels: {
-              color: 'pink',
-            },
-          },
-          tooltip: {
-            mode: 'index',
-            intersect: false,
-          },
-        },
-      },
+      }
     });
+
+    addChartControls(myChart);
 
     const chartCanvas = document.getElementById('stockChart');
     chartCanvas.style.display = 'block';
     setTimeout(() => {
       chartCanvas.style.opacity = 1;
     }, 50);
+  }
+
+  function addChartControls(chart) {
+    const controlsDiv = document.createElement('div');
+    controlsDiv.className = 'chart-controls mt-3';
+    controlsDiv.innerHTML = `
+      <div class="btn-group">
+        <button id="markerBtn" class="btn btn-sm btn-pink" onclick="toggleMarkerMode()">Add Markers</button>
+        <button id="doneBtn" class="btn btn-sm btn-pink" onclick="endMarkerMode()" style="display:none;">Done Adding Markers</button>
+        <button class="btn btn-sm btn-pink" onclick="resetZoom()">Reset Zoom</button>
+        <button class="btn btn-sm btn-pink" onclick="clearAllMarkers()">Clear All Markers</button>
+      </div>
+    `;
+    document.getElementById('stockChart').parentNode.appendChild(controlsDiv);
+  }
+
+  function toggleMarkerMode() {
+    isAddingMarker = true;
+    document.getElementById('markerBtn').style.display = 'none';
+    document.getElementById('doneBtn').style.display = 'inline-block';
+    document.getElementById('markerInstructions').style.display = 'block';
+    document.getElementById('stockChart').style.cursor = 'crosshair';
+  }
+
+  function endMarkerMode() {
+    isAddingMarker = false;
+    document.getElementById('markerBtn').style.display = 'inline-block';
+    document.getElementById('doneBtn').style.display = 'none';
+    document.getElementById('markerInstructions').style.display = 'none';
+    document.getElementById('stockChart').style.cursor = 'default';
+  }
+
+  function addMarkerAtPosition(date, price) {
+    const markerId = 'marker_' + Date.now();
+    markers.push({
+      id: markerId,
+      date: date,
+      price: price
+    });
+    
+    myChart.options.plugins.annotation.annotations[markerId] = {
+      type: 'point',
+      xValue: date,
+      yValue: price,
+      radius: 8,
+      backgroundColor: 'rgba(255, 105, 180, 0.7)',
+      borderColor: 'rgba(255, 255, 255, 1)',
+      borderWidth: 2,
+      label: {
+        content: `Mark (${date}, ${price.toFixed(2)})`,
+        enabled: true,
+        position: 'top'
+      }
+    };
+    
+    myChart.update();
+    updateMarkerList();
+    if (markers.length === 1) {
+      document.getElementById('markerListContainer').style.display = 'block';
+    }
+  }
+
+  function updateMarkerList() {
+    const markerList = document.getElementById('markerList');
+    markerList.innerHTML = '';
+    
+    markers.forEach((marker, index) => {
+      const markerItem = document.createElement('div');
+      markerItem.className = 'marker-item';
+      markerItem.innerHTML = `
+        <span>${marker.date}: $${marker.price.toFixed(2)}</span>
+        <span class="delete-marker" onclick="deleteMarker('${marker.id}', ${index})">×</span>
+      `;
+      markerList.appendChild(markerItem);
+    });
+  }
+
+  function deleteMarker(markerId, index) {
+    delete myChart.options.plugins.annotation.annotations[markerId];
+    markers.splice(index, 1);
+    myChart.update();
+    updateMarkerList();
+    if (markers.length === 0) {
+      document.getElementById('markerListContainer').style.display = 'none';
+    }
+  }
+
+  function clearAllMarkers() {
+    myChart.options.plugins.annotation.annotations = {};
+    markers = [];
+    myChart.update();
+    document.getElementById('markerListContainer').style.display = 'none';
+  }
+
+  function resetZoom() {
+    if (myChart) {
+      myChart.resetZoom();
+    }
   }
 </script>
 </body>
